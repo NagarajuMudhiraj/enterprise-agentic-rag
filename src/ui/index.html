@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise Agentic RAG | Intelligent Document & Knowledge Intelligence</title>
+    <meta name="description" content="Production Enterprise Agentic RAG System powered by Groq and ReAct reasoning with real-time PDF, DOCX, and Markdown document intelligence.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+    <div class="app-wrapper">
+        <!-- Top Navigation Bar -->
+        <header class="app-header">
+            <div class="header-brand">
+                <div class="brand-icon">
+                    <span class="icon-pulse"></span>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                        <polyline points="2 17 12 22 22 17"></polyline>
+                        <polyline points="2 12 12 17 22 12"></polyline>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>Enterprise Agentic RAG</h1>
+                    <span class="brand-tag">Autonomous Multi-Strategy Core</span>
+                </div>
+            </div>
+
+            <!-- Global Status Bar -->
+            <div class="header-stats">
+                <div class="stat-badge" id="engine-status-badge">
+                    <span class="status-dot"></span>
+                    <span class="stat-label">Engine:</span>
+                    <strong id="active-engine-text">Groq Llama-3.3 70B</strong>
+                </div>
+                <div class="stat-badge">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                        <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                        <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                        <line x1="6" y1="18" x2="6.01" y2="18"></line>
+                    </svg>
+                    <span class="stat-label">Chunks:</span>
+                    <strong id="stat-chunks-count">0</strong>
+                </div>
+                <div class="stat-badge">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="18" cy="5" r="3"></circle>
+                        <circle cx="6" cy="12" r="3"></circle>
+                        <circle cx="18" cy="19" r="3"></circle>
+                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                    </svg>
+                    <span class="stat-label">Graph Entities:</span>
+                    <strong id="stat-graph-count">0</strong>
+                </div>
+            </div>
+
+            <!-- Header Controls & Theme Switcher -->
+            <div class="header-actions">
+                <div class="header-role-container">
+                    <label for="role-select" class="role-label">Active Role:</label>
+                    <div class="select-wrapper">
+                        <select id="role-select">
+                            <option value="public" selected>Public</option>
+                            <option value="employee">Employee</option>
+                            <option value="engineer">Engineer</option>
+                            <option value="admin">Administrator</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="button" id="theme-toggle-btn" class="theme-toggle-btn" title="Toggle Clean White / Dark Velvet Pink mode" aria-label="Toggle theme">
+                    <svg class="theme-icon-dark" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                    <svg class="theme-icon-light" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <span id="theme-toggle-label">Clean White</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Grid Layout -->
+        <main class="app-main">
+            <!-- Left Sidebar: Document Management & Knowledge Base -->
+            <aside class="sidebar-panel">
+                <!-- Upload Container Card -->
+                <section class="card upload-card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <div class="card-icon upload-icon">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                            </div>
+                            <h2>Ingest Documents</h2>
+                        </div>
+                        <span class="badge badge-accent">Real-Time</span>
+                    </div>
+
+                    <!-- Drag & Drop Zone -->
+                    <div class="drop-zone" id="drop-zone">
+                        <input type="file" id="file-input" class="file-input-hidden" multiple accept=".pdf,.docx,.md,.markdown,.txt,.rst">
+                        <div class="drop-zone-content">
+                            <div class="drop-icon-bubble">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                                    <line x1="9" y1="15" x2="12" y2="12"></line>
+                                    <line x1="15" y1="15" x2="12" y2="12"></line>
+                                </svg>
+                            </div>
+                            <p class="drop-primary-text">Drag & drop <strong>PDF</strong>, <strong>DOCX</strong>, <strong>MD</strong>, or <strong>TXT</strong> files</p>
+                            <p class="drop-secondary-text">or <button type="button" class="browse-link" id="browse-btn">browse from computer</button></p>
+                            <div class="format-tags">
+                                <span class="format-tag">.PDF</span>
+                                <span class="format-tag">.DOCX</span>
+                                <span class="format-tag">.MD</span>
+                                <span class="format-tag">.TXT</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Ingestion Role Specification -->
+                    <div class="ingest-options">
+                        <div class="option-row">
+                            <span class="option-label">Assign Access Roles:</span>
+                            <div class="role-checkbox-group">
+                                <label class="checkbox-pill">
+                                    <input type="checkbox" id="role-cb-public" value="public" checked>
+                                    <span>public</span>
+                                </label>
+                                <label class="checkbox-pill">
+                                    <input type="checkbox" id="role-cb-employee" value="employee" checked>
+                                    <span>employee</span>
+                                </label>
+                                <label class="checkbox-pill">
+                                    <input type="checkbox" id="role-cb-admin" value="admin">
+                                    <span>admin</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Upload Queue / Progress -->
+                    <div class="upload-progress-container" id="upload-progress-container" style="display: none;">
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="upload-progress-fill"></div>
+                        </div>
+                        <span class="progress-status-text" id="upload-status-text">Uploading and indexing document...</span>
+                    </div>
+
+                    <!-- Ingested Files List -->
+                    <div class="recent-uploads-section">
+                        <div class="section-subheading">
+                            <span>Ingested Document Library</span>
+                            <button class="icon-refresh-btn" id="refresh-stats-btn" title="Refresh library metrics">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <polyline points="1 20 1 14 7 14"></polyline>
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="document-list" id="document-list">
+                            <!-- Populated dynamically by app.js -->
+                            <div class="empty-list-placeholder">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                                    <polyline points="13 2 13 9 20 9"></polyline>
+                                </svg>
+                                <span>No files uploaded yet in this session.</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Agent Tools Status Card -->
+                <section class="card tools-card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <div class="card-icon tool-icon">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+                                </svg>
+                            </div>
+                            <h2>Autonomous Agent Tools</h2>
+                        </div>
+                    </div>
+                    <div class="tool-tags-grid">
+                        <div class="tool-item">
+                            <div class="tool-dot active"></div>
+                            <div class="tool-info">
+                                <strong>search_hybrid</strong>
+                                <span>BM25 + Dense Vector fusion</span>
+                            </div>
+                        </div>
+                        <div class="tool-item">
+                            <div class="tool-dot active"></div>
+                            <div class="tool-info">
+                                <strong>query_knowledge_graph</strong>
+                                <span>Multi-hop entity relations</span>
+                            </div>
+                        </div>
+                        <div class="tool-item">
+                            <div class="tool-dot active"></div>
+                            <div class="tool-info">
+                                <strong>read_parent_context</strong>
+                                <span>Hierarchical parent expansion</span>
+                            </div>
+                        </div>
+                        <div class="tool-item">
+                            <div class="tool-dot active"></div>
+                            <div class="tool-info">
+                                <strong>compare_entities</strong>
+                                <span>Relational difference analysis</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </aside>
+
+            <!-- Right Main Area: Interactive Agentic Reasoning & Live Chat Viewport -->
+            <section class="chat-panel">
+                <!-- Chat Feed -->
+                <div class="chat-feed" id="chat-feed">
+                    <!-- Hero Welcome Banner -->
+                    <div class="hero-welcome-card" id="hero-welcome">
+                        <div class="hero-icon-bubble">
+                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                                <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                            </svg>
+                        </div>
+                        <h3>Autonomous Agentic RAG Assistant</h3>
+                        <p>Upload enterprise documentation or ask multi-hop relational questions. The agent dynamically decomposes inquiries, invokes specialized retrieval tools, grades evidence relevance, and verifies citation grounding in real-time.</p>
+                        
+                        <div class="sample-prompts-label">Try asking a sample question:</div>
+                        <div class="sample-prompts-container">
+                            <button type="button" class="sample-prompt-pill" data-prompt="What are the key security principles and rate limits?">
+                                🔒 What are the key security principles & rate limits?
+                            </button>
+                            <button type="button" class="sample-prompt-pill" data-prompt="What are the architectural dependencies and microservice requirements?">
+                                🧩 What are the architectural dependencies & requirements?
+                            </button>
+                            <button type="button" class="sample-prompt-pill" data-prompt="What is the data retention and automated backup policy schedule?">
+                                💾 What is the data retention & backup schedule?
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Floating Chat Input Bar -->
+                <div class="chat-input-wrapper">
+                    <form class="chat-input-form" id="chat-form">
+                        <div class="input-inner-container">
+                            <textarea 
+                                id="query-input" 
+                                class="query-textarea" 
+                                placeholder="Ask the autonomous agent anything about your uploaded documents..." 
+                                rows="1"
+                                required
+                            ></textarea>
+                            
+                            <div class="input-actions-row">
+                                <div class="input-hints">
+                                    <span class="kbd-badge">Enter</span> to send &bull; <span class="kbd-badge">Shift + Enter</span> for new line
+                                </div>
+                                
+                                <button type="submit" class="send-btn" id="send-btn" title="Send query to agent">
+                                    <span>Execute</span>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Citation Inspection Modal -->
+    <div class="modal-backdrop" id="citation-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="modal-chunk-title">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-badge">Evidence Source</span>
+                    <h3 id="modal-chunk-title">Document Source</h3>
+                </div>
+                <button type="button" class="modal-close-btn" id="modal-close-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-tag-row">
+                    <span class="modal-tag" id="modal-citation-tag">[doc#chunk]</span>
+                    <span class="modal-roles" id="modal-allowed-roles">Roles: public</span>
+                </div>
+                <div class="modal-section-label">Retrieved Evidence Passage</div>
+                <div class="modal-content-box" id="modal-chunk-text">Loading evidence content...</div>
+                <div id="modal-parent-container" style="display: none;">
+                    <div class="modal-section-label" style="margin-top: 10px;">Full Parent Context Section</div>
+                    <div class="modal-content-box modal-parent-box" id="modal-parent-text"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
