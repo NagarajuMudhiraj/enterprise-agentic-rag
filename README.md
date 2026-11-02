@@ -617,18 +617,18 @@ gantt
     title RAG Implementation Roadmap
     dateFormat  YYYY-MM-DD
     section Foundation
-    Phase 1: Environment & Schemas       :done,    p1, 2026-01-01, 3d
+    Phase 1 - Environment & Schemas       :done,    p1, 2026-01-01, 3d
     section Ingestion & Indexing
-    Phase 2: Tri-Indexing Pipeline       :active,  p2, after p1, 5d
+    Phase 2 - Tri-Indexing Pipeline       :active,  p2, after p1, 5d
     section Query & Retrieval
-    Phase 3: Adaptive Router             :         p3, after p2, 4d
-    Phase 4: Retrieval & Rank Fusion     :         p4, after p3, 5d
+    Phase 3 - Adaptive Router             :p3, after p2, 4d
+    Phase 4 - Retrieval & Rank Fusion     :p4, after p3, 5d
     section Generation & Verification
-    Phase 5: Grounded Generation         :         p5, after p4, 3d
-    Phase 6: Critic Verification Loop    :         p6, after p5, 4d
+    Phase 5 - Grounded Generation         :p5, after p4, 3d
+    Phase 6 - Critic Verification Loop    :p6, after p5, 4d
     section Production Readiness
-    Phase 7: Observability & Benchmarks  :         p7, after p6, 4d
-    Phase 8: FastAPI & Integration Tests :         p8, after p7, 3d
+    Phase 7 - Observability & Benchmarks  :p7, after p6, 4d
+    Phase 8 - FastAPI & Integration Tests :p8, after p7, 3d
 ```
 
 ---
