@@ -1,6 +1,14 @@
 # Enterprise Agentic RAG Architecture
 
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.111+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](docker-compose.yml)
+[![CI](https://img.shields.io/badge/CI-Hermetic%20Tests%20Passing-brightgreen?style=for-the-badge&logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
+[![Architecture](https://img.shields.io/badge/Architecture-Agentic%20RAG-8A2BE2?style=for-the-badge)](#-system-architecture)
+
 A production-grade, resilient Retrieval-Augmented Generation (RAG) system implementing intelligent indexing, adaptive multi-strategy retrieval, reciprocal rank fusion, grounded generation with inline citations, and closed-loop answer self-verification.
+
+> **Tags / Topics:** `agentic-rag` • `rag` • `fastapi` • `llm` • `knowledge-graph` • `reranking` • `react-framework` • `information-retrieval` • `hybrid-search` • `self-verification` • `reciprocal-rank-fusion`
 
 ---
 
