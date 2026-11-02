@@ -34,6 +34,38 @@ def test_docx_parser(tmp_path):
     assert "Docx paragraph 1 content." in doc.content
     assert "Docx paragraph 2 with SLA policy." in doc.content
 
+def test_docx_headings_and_tables(tmp_path):
+    import zipfile
+    docx_file = tmp_path / "report.docx"
+    xml_content = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+        b'<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Results</w:t></w:r></w:p>'
+        b'<w:p><w:r><w:t>The model reached </w:t></w:r><w:r><w:t>93.44% accuracy.</w:t></w:r></w:p>'
+        b'<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Metric</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Value</w:t></w:r></w:p></w:tc></w:tr>'
+        b'<w:tr><w:tc><w:p><w:r><w:t>ROC-AUC</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>0.9468</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+        b'<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Methods</w:t></w:r></w:p>'
+        b'<w:p><w:r><w:t>We used a stacking ensemble.</w:t></w:r></w:p>'
+        b'</w:body></w:document>'
+    )
+    with zipfile.ZipFile(docx_file, "w") as z:
+        z.writestr("word/document.xml", xml_content)
+
+    doc = DocumentParser.parse_file(str(docx_file))
+    assert "# Results" in doc.content
+    assert "The model reached 93.44% accuracy." in doc.content
+    assert "| ROC-AUC | 0.9468 |" in doc.content
+    assert doc.metadata["headings"] == ["Results", "Methods"]
+
+    parents, _ = StructureAwareChunker().chunk_document(doc)
+    assert len(parents) == 2
+
+def test_invalid_docx_raises(tmp_path):
+    bad_file = tmp_path / "broken.docx"
+    bad_file.write_bytes(b"not a zip")
+    with pytest.raises(ValueError):
+        DocumentParser.parse_file(str(bad_file))
+
 
 def test_hierarchical_chunker():
     doc = DocumentParser.parse_markdown(SAMPLE_DOC, title="Cloud SLA")

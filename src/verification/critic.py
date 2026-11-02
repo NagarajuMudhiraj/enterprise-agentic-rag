@@ -16,14 +16,28 @@ class AnswerVerificationCritic:
     STOP_WORDS = {
         "the", "and", "for", "with", "this", "that", "from", "are", "is", "was", "were",
         "have", "has", "all", "any", "these", "those", "which", "what", "where", "when",
-        "more", "also", "into", "been", "will", "does", "according", "system", "documentation"
+        "more", "also", "into", "been", "will", "does", "according", "system", "documentation",
+        "as", "its", "it", "be", "by", "of", "to", "in", "on", "at", "an", "or", "per", "can", "their", "there"
     }
+
+    @classmethod
+    def _tokens(cls, text: str) -> set:
+        """
+        Lowercased alphanumeric tokens with hyphenated words split and plural 's' stripped,
+        so paraphrases like 'rate-limits' still match 'rate limit'.
+        """
+        tokens = set()
+        for tok in re.findall(r'[a-z0-9]+', text.lower()):
+            if len(tok) > 3 and tok.endswith("s") and not tok.endswith("ss") and tok not in cls.STOP_WORDS:
+                tok = tok[:-1]
+            tokens.add(tok)
+        return tokens
 
     def _verify_claim_entailment(self, claim: AtomicClaim, evidence_map: Dict[str, str]) -> AtomicClaim:
         """
         Validates whether the cited evidence entails the claim words and semantic concepts.
         """
-        clean_claim = claim.claim_text.replace('\u202f', ' ').replace('\xa0', ' ')
+        clean_claim = ClaimExtractor.normalize_text(claim.claim_text)
 
         if not claim.cited_chunk_ids:
             # Uncited claim -> penalized as unverified neutral
@@ -31,7 +45,7 @@ class AnswerVerificationCritic:
             claim.entailment_score = 0.2
             return claim
 
-        all_tokens = set(re.findall(r'\b[a-zA-Z0-9_\-]{2,}\b', clean_claim.lower()))
+        all_tokens = {t for t in self._tokens(clean_claim) if len(t) >= 2}
         claim_tokens = all_tokens - self.STOP_WORDS
         if not claim_tokens:
             claim_tokens = all_tokens
@@ -61,12 +75,13 @@ class AnswerVerificationCritic:
             claim.entailment_score = 0.0
             return claim
 
-        combined_evidence = " ".join(relevant_evidence_texts).replace('\u202f', ' ').replace('\xa0', ' ').lower()
-        evidence_tokens = set(re.findall(r'\b[a-zA-Z0-9_\-]+\b', combined_evidence))
+        combined_evidence = ClaimExtractor.normalize_text(" ".join(relevant_evidence_texts)).lower()
+        evidence_tokens = self._tokens(combined_evidence)
 
-        # Check for numeric contradictions (e.g. 7 days vs 3600 seconds)
+        # Check for numeric contradictions (e.g. 7 days vs 3600 seconds).
+        # Evidence numbers are matched anywhere so 'AlphaFold2' / 'v12' still count as '2' / '12'.
         claim_numbers = set(re.findall(r'\b\d+\b', clean_claim))
-        evidence_numbers = set(re.findall(r'\b\d+\b', combined_evidence))
+        evidence_numbers = set(re.findall(r'\d+', combined_evidence))
         if claim_numbers and not claim_numbers.issubset(evidence_numbers):
             claim.entailment_status = "contradicted"
             claim.entailment_score = 0.0

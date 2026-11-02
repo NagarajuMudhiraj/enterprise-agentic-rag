@@ -1,5 +1,4 @@
 import pytest
-from src.pipeline import EnterpriseRAGPipeline
 
 SAMPLE_POLICY = """# Corporate Security Policy
 
@@ -18,8 +17,8 @@ Executive bonus pool for Q4 is capped at 15 percent.
 """
 
 @pytest.mark.asyncio
-async def test_end_to_end_pipeline():
-    pipeline = EnterpriseRAGPipeline()
+async def test_end_to_end_pipeline(fresh_pipeline):
+    pipeline = fresh_pipeline
 
     # 1. Ingest Public Policy
     pipeline.ingest_document(SAMPLE_POLICY, title="Security Policy", allowed_roles=["public", "employee"])

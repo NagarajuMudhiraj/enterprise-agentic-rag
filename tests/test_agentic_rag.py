@@ -1,5 +1,4 @@
 import pytest
-from src.pipeline import EnterpriseRAGPipeline
 from src.agent.tools.registry import AgentTool, ToolRegistry
 from src.agent.reflection.graders import RetrievalGrader, HallucinationGrader
 
@@ -59,8 +58,8 @@ async def test_agent_tool_registry():
     assert res_sync["output"] == 42
 
 @pytest.mark.asyncio
-async def test_agentic_rag_execution():
-    pipeline = EnterpriseRAGPipeline()
+async def test_agentic_rag_execution(fresh_pipeline):
+    pipeline = fresh_pipeline
     pipeline.ingest_document(SAMPLE_DATA, title="Payment Architecture")
 
     # 1. Test multi-hop relational inquiry
@@ -81,5 +80,5 @@ async def test_agentic_rag_execution():
     assert any(phrase in ans_lower for phrase in [
         "cannot confirm", "unable", "cannot provide", "not available",
         "no verified evidence", "do not contain", "does not contain",
-        "no information", "not mentioned", "not found"
+        "doesn't contain", "no information", "not mentioned", "not found"
     ])

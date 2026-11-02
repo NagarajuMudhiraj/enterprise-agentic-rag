@@ -636,47 +636,29 @@ gantt
 ### Phase 1: Environment & Foundational Setup
 
 #### Step 1.1: Initialize Project & Virtual Environment
+The repository already pins its stack; install exactly that instead of an
+alternate one, so local results match CI and the container image.
 ```bash
-# Initialize with uv or poetry (Python 3.11+)
-uv venv .venv
+python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Core dependencies
-uv pip install langchain langchain-community llama-index qdrant-client neo4j \
-  opensearch-py sentence-transformers ragas pydantic-settings fastapi uvicorn \
-  cohere tiktoken openai open-telemetry
+pip install -r requirements-dev.txt   # runtime + test dependencies, pinned
+cp .env.example .env                  # then fill in API_KEYS and any LLM key
 ```
 
-#### Step 1.2: Spin Up Infrastructure (Docker Compose)
-Create `docker-compose.yml` to run the multi-modal storage engines locally:
-```yaml
-version: '3.8'
-services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports: ["6333:6333"]
-    volumes: [qdrant_data:/qdrant/storage]
-
-  opensearch:
-    image: opensearchproject/opensearch:latest
-    environment:
-      - discovery.type=single-node
-      - DISABLE_SECURITY_PLUGIN=true
-    ports: ["9200:9200"]
-
-  neo4j:
-    image: neo4j:5-community
-    environment:
-      - NEO4J_AUTH=neo4j/password123
-    ports: ["7474:7474", "7687:7687"]
-
-  redis:
-    image: redis:alpine
-    ports: ["6379:6379"]
-
-volumes:
-  qdrant_data:
+#### Step 1.2: Run the Service
+The vector, BM25 and graph indexes are in-process, so no external datastore is
+required for local development.
+```bash
+python -m pytest -q          # hermetic: no keys, no network
+python main.py serve         # http://localhost:8000
+# or: docker compose up --build
 ```
+
+> The phases below describe the full design and an optional evolution toward
+> external stores (Qdrant / OpenSearch / Neo4j). None of those adapters are
+> wired into `src/` today — do not follow the original infra steps expecting
+> them to affect runtime behaviour.
 
 #### Step 1.3: Define Core Data Schemas (`src/common/models.py`)
 Establish strict Pydantic schemas shared across all pipeline components:
@@ -1001,20 +983,81 @@ Inspect indexed parent chunks, child vectors, and Knowledge Graph nodes/edges:
 python main.py status
 ```
 
-### 5. Launch Production FastAPI Server
+### 5. Launch the FastAPI Server
 ```bash
+# Development (anonymous dev roles are granted when no keys are configured)
+python main.py serve --port 8000
+
+# Production: authentication is mandatory and startup fails without keys
+export APP_ENV=production
+export API_KEYS="live-key-1:admin,engineer|live-key-2:public"
 python main.py serve --port 8000
 ```
 
-#### Production REST & SSE Endpoints:
-- `POST /api/v1/agent/query`: Full Agentic reasoning returning answer, citations, and trajectory.
-- `POST /api/v1/agent/stream`: **Server-Sent Events (SSE)** real-time thought and tool execution streaming.
-- `GET /api/v1/agent/info`: Active LLM provider, registered tools schema, and indexing stats.
-- `POST /api/v1/ingest`: JSON document payload ingestion.
-- `POST /api/v1/ingest/file`: Multipart file upload (`.pdf`, `.md`, `.txt`).
-- `POST /api/v1/query`: Standard verified RAG query.
-- `GET /api/v1/graph`: Live Knowledge Graph nodes and edges.
-- `GET /health`: System readiness and index health metrics.
+All data endpoints require the `X-API-Key` header; the key's roles are resolved
+server-side, so a caller can never widen its own access by sending roles.
+
+| Method | Endpoint | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/health` | public | Liveness probe (no index access) |
+| `GET` | `/ready` | public | Readiness probe with index counts |
+| `GET` | `/metrics` | admin | Prometheus exposition |
+| `POST` | `/api/v1/ingest` | write role | JSON document ingestion |
+| `POST` | `/api/v1/ingest/file` | write role | Multipart upload (extension + size validated) |
+| `GET` | `/api/v1/documents` | any role | Document library, filtered by the caller's roles |
+| `DELETE` | `/api/v1/documents/{doc_id}` | write role | Remove a document and its chunks |
+| `POST` | `/api/v1/query` | any role | Verified RAG query |
+| `POST` | `/api/v1/agent/query` | any role | Agent answer with full trajectory |
+| `POST` | `/api/v1/agent/stream` | any role | SSE stream of thoughts, actions, answer |
+| `GET` | `/api/v1/agent/info` | any role | Provider, tools, index stats |
+| `GET` | `/api/v1/graph` | any role | Knowledge graph overview |
+| `GET` | `/api/v1/chunk/{tag}` | any role | Evidence for a citation (role-checked) |
+| `GET` | `/api/v1/admin/usage` | admin | Token and cost accounting |
+| `GET` | `/api/v1/admin/audit` | admin | Recent ingest/query audit events |
+
+Errors share one shape, so clients branch on `error.code` instead of parsing prose:
+
+```json
+{"error": {"code": "unauthorized", "message": "Missing X-API-Key header."}, "request_id": "71dbee3e61984d13"}
+```
+
+An answer carries two independent verdicts, and clients should render them
+differently — they mean different things:
+
+| Field | Meaning |
+| --- | --- |
+| `verification_passed: true` | Every claim in `answer` maps to a retrieved passage. |
+| `verification_passed: false`, `abstained: false` | An answer was produced but some sentences are ungrounded; they are listed in `unsupported_claims`. |
+| `abstained: true` | The system declined to answer: no retrieved passage supported the question. `citations` and `unsupported_claims` are empty and `faithfulness_score` is `0.0`, because a refusal asserts nothing to score. When a passage did share the query's terms, the answer names it so the user can inspect it. |
+
+### 6. Container Deployment
+```bash
+docker build -t enterprise-rag .
+docker run -p 8000:8000 \
+  -e APP_ENV=production \
+  -e API_KEYS="live-key-1:admin,engineer|live-key-2:public" \
+  -v rag_data:/data \
+  enterprise-rag
+```
+> The index, its lock and the rate limiter are per-process, so the image runs a
+> single worker. Set `ALLOW_MULTI_WORKER=true` only after moving the index to a
+> shared store.
+
+### 7. Testing
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+The suite is hermetic — no LLM keys, no network, no shared storage:
+
+- `tests/test_api.py` — API contracts: auth, RBAC, error shapes, upload
+  validation, path-traversal handling, access control on evidence.
+- `tests/test_infrastructure.py` — metrics rendering, rate limiter, filename
+  sanitising, provider retry/failover, atomic persistence and ingestion locking.
+- `tests/test_golden_set.py` — retrieval quality gate over
+  `tests/golden/retrieval_golden.json` (recall floor plus ACL leak assertions).
+- `tests/test_agentic_rag.py`, `test_pipeline_e2e.py`, `test_retrieval.py`,
+  `test_verification.py`, `test_ingestion.py` — component and end-to-end behaviour.
 
 ---
 

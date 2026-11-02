@@ -1,0 +1,86 @@
+{
+  "version": "2026.11.1",
+  "notes": "Retrieval golden set. Each case names the document that must surface and a marker string that proves the right chunk was found. Add cases here when a retrieval regression is fixed.",
+  "documents": [
+    {
+      "title": "Backup Policy",
+      "allowed_roles": ["public"],
+      "text": "# Backup Policy\n\n## Schedule\nFull backups run daily at 02:00 UTC and take approximately forty minutes.\nIncremental backups run every four hours.\n\n## Retention and Encryption\nBackups are retained for 30 days, after which they are purged automatically.\nAll backup archives are encrypted at rest with AES-256 and stored in a separate region.\n\n## Restore Testing\nA restore rehearsal is performed on the first Monday of each quarter."
+    },
+    {
+      "title": "API Gateway Spec",
+      "allowed_roles": ["public"],
+      "text": "# API Gateway Spec\n\n## Rate Limiting\nEach client is limited to 100 requests per second with a burst allowance of 200.\nExceeding the limit returns HTTP 429 with a Retry-After header.\n\n## Authentication\nClients authenticate with a JWT bearer token. Tokens expire after 15 minutes and must be refreshed.\n\n## Retries\nTransient upstream failures are retried with exponential backoff up to 3 attempts."
+    },
+    {
+      "title": "Compensation Committee",
+      "allowed_roles": ["executive"],
+      "text": "# Compensation Committee\n\n## Bonus Pool\nThe executive bonus pool for Q4 is capped at 15 percent of operating profit.\n\n## Vesting\nEquity grants vest over four years with a one year cliff."
+    }
+  ],
+  "cases": [
+    {
+      "id": "backup-window",
+      "question": "When do the full backups run?",
+      "roles": ["public"],
+      "expect_title": "Backup Policy",
+      "expect_any": ["02:00"]
+    },
+    {
+      "id": "backup-retention",
+      "question": "How long are backup archives retained?",
+      "roles": ["public"],
+      "expect_title": "Backup Policy",
+      "expect_any": ["30 days"]
+    },
+    {
+      "id": "backup-encryption",
+      "question": "What encryption is used for the backups?",
+      "roles": ["public"],
+      "expect_title": "Backup Policy",
+      "expect_any": ["AES-256"]
+    },
+    {
+      "id": "gateway-rate-limit",
+      "question": "What is the API gateway rate limit per client?",
+      "roles": ["public"],
+      "expect_title": "API Gateway Spec",
+      "expect_any": ["100 requests per second"]
+    },
+    {
+      "id": "gateway-token-ttl",
+      "question": "How long does a JWT token last before it must be refreshed?",
+      "roles": ["public"],
+      "expect_title": "API Gateway Spec",
+      "expect_any": ["15 minutes"]
+    },
+    {
+      "id": "gateway-retries",
+      "question": "How many times are transient upstream failures retried?",
+      "roles": ["public"],
+      "expect_title": "API Gateway Spec",
+      "expect_any": ["3 attempts"]
+    },
+    {
+      "id": "compensation-vesting",
+      "question": "What is the equity vesting schedule?",
+      "roles": ["executive"],
+      "expect_title": "Compensation Committee",
+      "expect_any": ["four years"]
+    }
+  ],
+  "isolation_cases": [
+    {
+      "id": "exec-bonus-as-public",
+      "question": "What is the executive bonus pool cap?",
+      "roles": ["public"],
+      "forbidden_title": "Compensation Committee"
+    },
+    {
+      "id": "compensation-as-engineer",
+      "question": "How does the bonus pool get calculated?",
+      "roles": ["engineer"],
+      "forbidden_title": "Compensation Committee"
+    }
+  ]
+}

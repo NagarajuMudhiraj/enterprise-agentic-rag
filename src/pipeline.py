@@ -1,5 +1,9 @@
+import json
+import logging
 import os
 import asyncio
+import tempfile
+import threading
 import time
 import uuid
 
@@ -35,12 +39,16 @@ from src.verification.feedback_loop import FeedbackLoopOrchestrator
 
 from src.monitoring.tracer import PipelineTracer
 from src.monitoring.security import SecurityManager
+from src.prompts import PROMPTS_VERSION
 
 from src.agent.tools.registry import ToolRegistry
 from src.agent.tools.retrieval_tools import build_retrieval_tools
 from src.agent.llm.provider import LLMProvider
 from src.agent.events.event_bus import AgentEventBus
 from src.agent.core.react_engine import ReActAgentEngine
+
+logger = logging.getLogger(__name__)
+
 
 class EnterpriseRAGPipeline:
     """
@@ -53,7 +61,11 @@ class EnterpriseRAGPipeline:
     """
 
     def __init__(self, storage_dir: Optional[str] = None):
-        self.storage_dir = storage_dir
+        self.storage_dir = storage_dir or settings.STORAGE_DIR
+        # Guards every index mutation: ingest arrives from the threadpool while a
+        # query may be reading the same structures.
+        self._lock = threading.RLock()
+        self._state_loaded = False
         # Storage & Ingestion Layer
         self.chunk_store: Dict[str, Chunk] = {}
         self.parent_store: Dict[str, Chunk] = {}
@@ -73,22 +85,24 @@ class EnterpriseRAGPipeline:
         # Fusion & Validation Layer
         self.reranker = CrossEncoderReranker(self.parent_store)
 
+        # Agent Core Setup (Groq / OpenAI / Local). Created before the generator so
+        # generation and reasoning share one pooled HTTP client and cost ledger.
+        self.llm_provider = LLMProvider()
+        self.event_bus = AgentEventBus()
+
         # Generation Layer
         self.context_builder = ContextBuilder()
-        self.generator = GroundedGenerator()
+        self.generator = GroundedGenerator(llm_provider=self.llm_provider)
 
         # Verification & Critic Layer
         self.critic = AnswerVerificationCritic()
         self.feedback_orchestrator = FeedbackLoopOrchestrator(max_retries=settings.MAX_VERIFICATION_RETRIES)
 
-        # Agent Core Setup (Groq / OpenAI / Local)
-        self.llm_provider = LLMProvider()
-        self.event_bus = AgentEventBus()
         self._refresh_agent_tools()
 
         # Try auto-loading existing index state if present
         if self.storage_dir and os.path.exists(self.storage_dir):
-            self.load_state(self.storage_dir)
+            self._state_loaded = self.load_state(self.storage_dir)
 
     def _refresh_agent_tools(self):
         """
@@ -110,35 +124,64 @@ class EnterpriseRAGPipeline:
 
 
 
+    def _remove_documents_titled(self, title: str) -> int:
+        """
+        Removes previously ingested documents with the same title so re-uploads replace them.
+        """
+        stale_doc_ids = {
+            c.doc_id for c in list(self.parent_store.values()) + list(self.chunk_store.values())
+            if c.metadata.get("title") == title
+        }
+        if not stale_doc_ids:
+            return 0
+
+        stale_children = [cid for cid, c in self.chunk_store.items() if c.doc_id in stale_doc_ids]
+        for cid in stale_children:
+            del self.chunk_store[cid]
+        for pid in [pid for pid, p in self.parent_store.items() if p.doc_id in stale_doc_ids]:
+            del self.parent_store[pid]
+
+        self.vector_indexer.remove_chunks(stale_children)
+        self.keyword_indexer.remove_chunks(stale_children)
+        # Graph edges carry chunk provenance; rebuild from the remaining chunks
+        self.graph_indexer.__init__()
+        self.graph_indexer.index_chunks(list(self.chunk_store.values()))
+        return len(stale_doc_ids)
+
     def _ingest_parsed_doc(self, doc: Document) -> Dict[str, Any]:
-        parent_chunks, child_chunks = self.chunker.chunk_document(doc)
+        with self._lock:
+            self._remove_documents_titled(doc.title)
+            parent_chunks, child_chunks = self.chunker.chunk_document(doc)
 
-        for p in parent_chunks:
-            self.parent_store[p.chunk_id] = p
-        for c in child_chunks:
-            self.chunk_store[c.chunk_id] = c
+            for p in parent_chunks:
+                self.parent_store[p.chunk_id] = p
+            for c in child_chunks:
+                self.chunk_store[c.chunk_id] = c
 
-        self.vector_indexer.index_chunks(child_chunks)
-        self.keyword_indexer.index_chunks(child_chunks)
-        self.graph_indexer.index_chunks(child_chunks)
-        self._refresh_agent_tools()
+            self.vector_indexer.index_chunks(child_chunks)
+            self.keyword_indexer.index_chunks(child_chunks)
+            self.graph_indexer.index_chunks(child_chunks)
+            self._refresh_agent_tools()
 
-        # Persist updated state if storage_dir is configured
-        if self.storage_dir:
-            try:
+            # Persist before acknowledging. A 200 must mean "durable"; the old
+            # `except Exception: pass` here reported success after losing the data.
+            if self.storage_dir:
                 self.save_state(self.storage_dir)
-            except Exception:
-                pass
 
+            total_nodes = self.graph_indexer.graph.number_of_nodes()
+            total_edges = self.graph_indexer.graph.number_of_edges()
 
-
+        logger.info(
+            "document_ingested",
+            extra={"doc_id": doc.doc_id, "title": doc.title},
+        )
         return {
             "doc_id": doc.doc_id,
             "title": doc.title,
             "parent_chunks_count": len(parent_chunks),
             "child_chunks_count": len(child_chunks),
-            "total_indexed_nodes": len(self.graph_indexer.graph.nodes),
-            "total_indexed_edges": len(self.graph_indexer.graph.edges),
+            "total_indexed_nodes": total_nodes,
+            "total_indexed_edges": total_edges,
         }
 
     def ingest_document(self, raw_text: str, title: str = "Untitled Document", allowed_roles: List[str] = None) -> Dict[str, Any]:
@@ -163,34 +206,52 @@ class EnterpriseRAGPipeline:
         docs = DocumentParser.parse_directory(dir_path, allowed_roles=allowed_roles)
         return [self._ingest_parsed_doc(doc) for doc in docs]
 
-    def save_state(self, storage_dir: str = "data/storage") -> None:
+    def save_state(self, storage_dir: str = None) -> None:
         """
-        Persists all chunks, vector indices, BM25 indices, and Knowledge Graph to disk.
+        Persists chunks and graph edges atomically.
+
+        Each file is written to a temporary sibling and then os.replace()d, so a
+        crash mid-write leaves the previous snapshot intact instead of a
+        truncated JSON file. Failures propagate: callers must not report success.
         """
-        import json
-        os.makedirs(storage_dir, exist_ok=True)
+        target_dir = storage_dir or self.storage_dir
+        if not target_dir:
+            raise RuntimeError("No storage directory configured for persistence")
+        os.makedirs(target_dir, exist_ok=True)
 
-        # Save chunks
-        chunks_data = {
-            "parents": {k: v.model_dump() for k, v in self.parent_store.items()},
-            "children": {k: v.model_dump() for k, v in self.chunk_store.items()},
-        }
-        with open(os.path.join(storage_dir, "chunks.json"), "w", encoding="utf-8") as f:
-            json.dump(chunks_data, f)
+        with self._lock:
+            chunks_data = {
+                "parents": {k: v.model_dump() for k, v in self.parent_store.items()},
+                "children": {k: v.model_dump() for k, v in self.chunk_store.items()},
+            }
+            graph_edges = [
+                {"u": u, "v": v, **data}
+                for u, v, data in self.graph_indexer.graph.edges(data=True)
+            ]
 
-        # Save graph edges
-        graph_edges = [
-            {"u": u, "v": v, **data}
-            for u, v, data in self.graph_indexer.graph.edges(data=True)
-        ]
-        with open(os.path.join(storage_dir, "graph.json"), "w", encoding="utf-8") as f:
-            json.dump(graph_edges, f)
+        self._atomic_write_json(os.path.join(target_dir, "chunks.json"), chunks_data)
+        self._atomic_write_json(os.path.join(target_dir, "graph.json"), graph_edges)
+
+    @staticmethod
+    def _atomic_write_json(path: str, payload: Any) -> None:
+        directory = os.path.dirname(path) or "."
+        descriptor, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
 
     def load_state(self, storage_dir: str = "data/storage") -> bool:
         """
-        Loads persisted chunks, vector indices, BM25 indices, and Knowledge Graph from disk.
+        Loads persisted chunks and graph from disk. Returns False when no usable
+        snapshot exists; the reason is logged rather than swallowed.
         """
-        import json
         chunks_path = os.path.join(storage_dir, "chunks.json")
         if not os.path.exists(chunks_path):
             return False
@@ -199,18 +260,93 @@ class EnterpriseRAGPipeline:
             with open(chunks_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            self.parent_store = {k: Chunk(**v) for k, v in data.get("parents", {}).items()}
-            self.chunk_store = {k: Chunk(**v) for k, v in data.get("children", {}).items()}
+            # Update in place: retrievers and the reranker hold references to these dicts
+            with self._lock:
+                self.parent_store.clear()
+                self.parent_store.update({k: Chunk(**v) for k, v in data.get("parents", {}).items()})
+                self.chunk_store.clear()
+                self.chunk_store.update({k: Chunk(**v) for k, v in data.get("children", {}).items()})
 
-            child_list = list(self.chunk_store.values())
-            self.vector_indexer.index_chunks(child_list)
-            self.keyword_indexer.index_chunks(child_list)
-            self.graph_indexer.index_chunks(child_list)
-            self._refresh_agent_tools()
+                child_list = list(self.chunk_store.values())
+                self.vector_indexer.index_chunks(child_list)
+                self.keyword_indexer.index_chunks(child_list)
+                self.graph_indexer.index_chunks(child_list)
+                self._refresh_agent_tools()
+            logger.info(
+                "state_loaded",
+                extra={"doc_id": f"{len(self.chunk_store)} chunks"},
+            )
             return True
 
         except Exception:
+            logger.exception("Failed to load persisted state from %s", storage_dir)
             return False
+
+    # ----------------------------------------------------------- lifecycle
+    def is_ready(self) -> bool:
+        """True when this process holds a usable (possibly empty) index."""
+        with self._lock:
+            return isinstance(self.chunk_store, dict) and self.graph_indexer is not None
+
+    def stats(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "documents": len(self.list_documents()),
+                "parent_chunks": len(self.parent_store),
+                "child_chunks": len(self.chunk_store),
+                "graph_nodes": self.graph_indexer.graph.number_of_nodes(),
+                "graph_edges": self.graph_indexer.graph.number_of_edges(),
+                "state_loaded": self._state_loaded,
+                "storage_dir": self.storage_dir,
+            }
+
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """One entry per ingested document, derived from parent chunks."""
+        documents: Dict[str, Dict[str, Any]] = {}
+        with self._lock:
+            for chunk in self.parent_store.values():
+                entry = documents.get(chunk.doc_id)
+                if entry is None:
+                    documents[chunk.doc_id] = {
+                        "doc_id": chunk.doc_id,
+                        "title": chunk.metadata.get("title", "Untitled Document"),
+                        "allowed_roles": list(chunk.allowed_roles),
+                        "parent_chunks": 1,
+                    }
+                else:
+                    entry["parent_chunks"] += 1
+            for chunk in self.chunk_store.values():
+                entry = documents.get(chunk.doc_id)
+                if entry is not None:
+                    entry["child_chunks"] = entry.get("child_chunks", 0) + 1
+        return sorted(documents.values(), key=lambda d: d["title"].lower())
+
+    def delete_document(self, doc_id: str) -> int:
+        """Removes every chunk belonging to a document. Returns the chunk count removed."""
+        with self._lock:
+            child_ids = [cid for cid, c in self.chunk_store.items() if c.doc_id == doc_id]
+            parent_ids = [pid for pid, p in self.parent_store.items() if p.doc_id == doc_id]
+            if not child_ids and not parent_ids:
+                return 0
+
+            for cid in child_ids:
+                del self.chunk_store[cid]
+            for pid in parent_ids:
+                del self.parent_store[pid]
+
+            self.vector_indexer.remove_chunks(child_ids)
+            self.keyword_indexer.remove_chunks(child_ids)
+            # Graph edges carry chunk provenance; rebuild from the remaining chunks
+            self.graph_indexer.__init__()
+            self.graph_indexer.index_chunks(list(self.chunk_store.values()))
+            self._refresh_agent_tools()
+
+            if self.storage_dir:
+                self.save_state(self.storage_dir)
+
+        removed = len(child_ids) + len(parent_ids)
+        logger.info("document_deleted", extra={"doc_id": doc_id})
+        return removed
 
 
     async def _execute_retrieval_layer(
@@ -361,7 +497,9 @@ class EnterpriseRAGPipeline:
                     retries_used=attempt,
                     fallback_used=False,
                     latency_ms=tracer.get_total_latency_ms(),
-                    trace_events=tracer.spans
+                    trace_events=tracer.spans,
+                    unsupported_claims=list(verification.missing_evidence_claims),
+                    prompt_version=PROMPTS_VERSION,
                 )
 
             # Decision: Feedback loop retry if allowed
@@ -382,5 +520,7 @@ class EnterpriseRAGPipeline:
             retries_used=self.feedback_orchestrator.max_retries,
             fallback_used=True,
             latency_ms=tracer.get_total_latency_ms(),
-            trace_events=tracer.spans
+            trace_events=tracer.spans,
+            unsupported_claims=[],
+            prompt_version=PROMPTS_VERSION,
         )

@@ -1,7 +1,7 @@
 /**
  * Enterprise Agentic RAG - Frontend Application Logic
  * Supports DOCX, PDF, Markdown & Plaintext uploads, live ReAct trajectory streaming (SSE),
- * interactive citation inspection, and multi-role RBAC queries.
+ * and interactive citation inspection.
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -19,7 +19,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const statGraphCount = document.getElementById("stat-graph-count");
     const activeEngineText = document.getElementById("active-engine-text");
 
-    const roleSelect = document.getElementById("role-select");
     const chatFeed = document.getElementById("chat-feed");
     const heroWelcome = document.getElementById("hero-welcome");
     const chatForm = document.getElementById("chat-form");
@@ -59,8 +58,86 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // ==========================================================================
+    // 0. API Key Handling
+    // ==========================================================================
+    // The key is never bundled with the app: the operator enters it, it lives in
+    // sessionStorage, and it is attached as X-API-Key on every request.
+    const authGate = document.getElementById("auth-gate");
+    const authForm = document.getElementById("auth-form");
+    const authInput = document.getElementById("auth-key-input");
+    const authError = document.getElementById("auth-error");
+    const authCancelBtn = document.getElementById("auth-cancel");
+    const authKeyBtn = document.getElementById("auth-key-btn");
+    const authKeyLabel = document.getElementById("auth-key-label");
+
+    let apiKey = sessionStorage.getItem("rag_api_key") || "";
+
+    function updateKeyBadge() {
+        if (authKeyLabel) authKeyLabel.textContent = apiKey ? "Key Set" : "API Key";
+        if (authKeyBtn) authKeyBtn.classList.toggle("key-active", Boolean(apiKey));
+    }
+
+    function showAuthGate(message) {
+        if (!authGate) return;
+        if (message) {
+            authError.textContent = message;
+            authError.style.display = "block";
+        } else {
+            authError.style.display = "none";
+        }
+        authGate.style.display = "flex";
+        authInput.value = "";
+        authInput.focus();
+    }
+
+    function hideAuthGate() {
+        if (authGate) authGate.style.display = "none";
+    }
+
+    function extractErrorMessage(payload, fallback) {
+        if (!payload) return fallback;
+        if (payload.error && payload.error.message) return payload.error.message;
+        if (typeof payload.detail === "string") return payload.detail;
+        return fallback;
+    }
+
+    async function authFetch(url, options = {}) {
+        const headers = new Headers(options.headers || {});
+        if (apiKey) headers.set("X-API-Key", apiKey);
+        const response = await fetch(url, { ...options, headers });
+        if (response.status === 401) {
+            const payload = await response.clone().json().catch(() => null);
+            showAuthGate(
+                apiKey
+                    ? "That API key was rejected. Enter a valid key."
+                    : extractErrorMessage(payload, "An API key is required.")
+            );
+        }
+        return response;
+    }
+
+    if (authKeyBtn) authKeyBtn.addEventListener("click", () => showAuthGate(""));
+    if (authCancelBtn) authCancelBtn.addEventListener("click", hideAuthGate);
+    if (authForm) {
+        authForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const candidate = authInput.value.trim();
+            if (!candidate) return;
+            apiKey = candidate;
+            sessionStorage.setItem("rag_api_key", apiKey);
+            updateKeyBadge();
+            hideAuthGate();
+            showToast("API key stored for this session", "success");
+            fetchSystemStats();
+            fetchDocuments();
+        });
+    }
+    updateKeyBadge();
+
     // Local Session State
     let uploadedFiles = [];
+    let serverDocuments = [];
     let isProcessing = false;
 
     // ==========================================================================
@@ -85,18 +162,25 @@ document.addEventListener("DOMContentLoaded", () => {
     // ==========================================================================
     async function fetchSystemStats() {
         try {
-            const [healthRes, agentRes] = await Promise.all([
-                fetch("/health").then(r => r.json()).catch(() => null),
-                fetch("/api/v1/agent/info").then(r => r.json()).catch(() => null)
+            // /ready is the probe that reports index size; /health is liveness only.
+            // Keep the authenticated probe quiet until a key exists, so a first
+            // visit does not open the key gate before the user does anything.
+            const agentPromise = apiKey
+                ? authFetch("/api/v1/agent/info").then(r => (r.ok ? r.json() : null)).catch(() => null)
+                : Promise.resolve(null);
+
+            const [readyRes, agentRes] = await Promise.all([
+                fetch("/ready").then(r => (r.ok ? r.json() : null)).catch(() => null),
+                agentPromise
             ]);
 
-            if (healthRes) {
-                statChunksCount.textContent = healthRes.indexed_chunks || 0;
-                statGraphCount.textContent = healthRes.graph_nodes || 0;
+            if (readyRes) {
+                statChunksCount.textContent = readyRes.child_chunks || 0;
+                statGraphCount.textContent = readyRes.graph_nodes || 0;
             }
 
             if (agentRes) {
-                const prov = (agentRes.provider || "Local").toUpperCase();
+                const prov = (agentRes.provider || "local").toUpperCase();
                 const model = agentRes.model || "deterministic";
                 activeEngineText.textContent = `${prov}: ${model}`;
             }
@@ -109,6 +193,7 @@ document.addEventListener("DOMContentLoaded", () => {
     fetchSystemStats();
     refreshStatsBtn.addEventListener("click", () => {
         fetchSystemStats();
+        fetchDocuments();
         showToast("System metrics refreshed", "info");
     });
 
@@ -150,14 +235,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    function getSelectedRoles() {
-        const roles = [];
-        if (document.getElementById("role-cb-public")?.checked) roles.push("public");
-        if (document.getElementById("role-cb-employee")?.checked) roles.push("employee");
-        if (document.getElementById("role-cb-admin")?.checked) roles.push("admin");
-        return roles.length ? roles.join(",") : "public";
-    }
-
     async function handleFileUploads(files) {
         if (!files.length) return;
 
@@ -183,16 +260,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const formData = new FormData();
             formData.append("file", file);
-            formData.append("allowed_roles", getSelectedRoles());
 
             try {
-                const res = await fetch("/api/v1/ingest/file", {
+                const res = await authFetch("/api/v1/ingest/file", {
                     method: "POST",
                     body: formData
                 });
-                const result = await res.json();
+                const result = await res.json().catch(() => null);
 
-                if (res.ok && result.status === "success") {
+                if (res.ok && result && result.status === "success") {
                     const ext = file.name.split(".").pop().toUpperCase();
                     uploadedFiles.unshift({
                         name: file.name,
@@ -203,7 +279,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     renderUploadedList();
                     showToast(`Successfully indexed ${file.name}!`, "success");
                 } else {
-                    showToast(`Failed to index ${file.name}: ${result.detail || "Server error"}`, "error");
+                    showToast(
+                        `Failed to index ${file.name}: ${extractErrorMessage(result, `HTTP ${res.status}`)}`,
+                        "error"
+                    );
                 }
             } catch (err) {
                 showToast(`Network error uploading ${file.name}`, "error");
@@ -215,33 +294,65 @@ document.addEventListener("DOMContentLoaded", () => {
             uploadProgressFill.style.width = "0%";
             fileInput.value = "";
             fetchSystemStats();
+            fetchDocuments();
         }, 800);
     }
 
+    // ------------------------------------------------------------------
+    // Document library (server-backed, so it survives a page reload)
+    // ------------------------------------------------------------------
+    async function fetchDocuments() {
+        if (!apiKey) return;
+        try {
+            const res = await authFetch("/api/v1/documents");
+            if (!res.ok) return;
+            const payload = await res.json();
+            serverDocuments = payload.documents || [];
+            renderUploadedList();
+        } catch (err) {
+            console.error("Failed to load document library:", err);
+        }
+    }
+
+    function docBadge(title) {
+        const match = /\.([a-z0-9]{2,5})$/i.exec(title || "");
+        return match ? match[1].toUpperCase() : "DOC";
+    }
+
     function renderUploadedList() {
-        if (uploadedFiles.length === 0) {
+        const library = serverDocuments.length
+            ? serverDocuments.map(doc => ({
+                name: doc.title || "Untitled Document",
+                ext: docBadge(doc.title),
+                chunks: doc.child_chunks || 0
+            }))
+            : uploadedFiles;
+
+        if (library.length === 0) {
             documentList.innerHTML = `
                 <div class="empty-list-placeholder">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                         <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
                         <polyline points="13 2 13 9 20 9"></polyline>
                     </svg>
-                    <span>No files uploaded yet in this session.</span>
+                    <span>No documents indexed yet.</span>
                 </div>
             `;
             return;
         }
 
-        documentList.innerHTML = uploadedFiles.map(doc => `
+        documentList.innerHTML = library.map(doc => `
             <div class="doc-item">
-                <div class="doc-item-title" title="${doc.name}">${doc.name}</div>
+                <div class="doc-item-title" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</div>
                 <div class="doc-item-meta">
-                    <span class="doc-type-badge">${doc.ext}</span>
+                    <span class="doc-type-badge">${escapeHtml(doc.ext)}</span>
                     <span style="font-size: 0.72rem; color: var(--text-muted);">${doc.chunks} ch</span>
                 </div>
             </div>
         `).join("");
     }
+
+    fetchDocuments();
 
     // ==========================================================================
     // 4. Chat, Auto-Resizing & Sample Prompts
@@ -278,7 +389,6 @@ document.addEventListener("DOMContentLoaded", () => {
         // Hide welcome banner on first query
         if (heroWelcome) heroWelcome.style.display = "none";
 
-        const currentRole = roleSelect.value;
         appendUserMessage(query);
 
         queryInput.value = "";
@@ -292,7 +402,7 @@ document.addEventListener("DOMContentLoaded", () => {
         scrollToBottom();
 
         try {
-            await streamAgentQuery(query, [currentRole], agentContainer);
+            await streamAgentQuery(query, agentContainer);
         } catch (err) {
             console.error("Agent error:", err);
             agentContainer.answerBody.innerHTML = `<span style="color: var(--danger)">Agent execution encountered an error: ${err.message}</span>`;
@@ -352,6 +462,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <div class="answer-body">
                         <span style="color: var(--text-muted); font-style: italic;">Reasoning and retrieving evidence...</span>
                     </div>
+                    <div class="unsupported-claims" style="display: none;"></div>
                     <div class="answer-footer" style="display: none;">
                         <div class="verification-tag verified">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -384,6 +495,7 @@ document.addEventListener("DOMContentLoaded", () => {
             planList: row.querySelector(".plan-list"),
             stepsContainer: row.querySelector(".steps-container"),
             answerBody: row.querySelector(".answer-body"),
+            claimsBox: row.querySelector(".unsupported-claims"),
             answerFooter: row.querySelector(".answer-footer"),
             verifStatus: row.querySelector(".verif-status"),
             metricFaithfulness: row.querySelector(".metric-faithfulness"),
@@ -391,22 +503,35 @@ document.addEventListener("DOMContentLoaded", () => {
         };
     }
 
-    async function streamAgentQuery(query, userRoles, container) {
+    async function streamAgentQuery(query, container) {
         // Use Fetch with Streaming Reader for SSE endpoint
-        const response = await fetch("/api/v1/agent/stream", {
+        const response = await authFetch("/api/v1/agent/stream", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: query, user_roles: userRoles })
+            body: JSON.stringify({ query: query })
         });
 
+        if (response.status === 401) {
+            if (container.spinner) container.spinner.style.display = "none";
+            container.answerBody.textContent = "An API key is required to query the index.";
+            return;
+        }
+
         if (!response.ok) {
-            // Fallback to synchronous agent query
-            const fallbackRes = await fetch("/api/v1/agent/query", {
+            // Fallback to the synchronous agent query (same auth, richer errors)
+            const fallbackRes = await authFetch("/api/v1/agent/query", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ query: query, user_roles: userRoles })
+                body: JSON.stringify({ query: query })
             });
-            const data = await fallbackRes.json();
+            const data = await fallbackRes.json().catch(() => null);
+            if (!fallbackRes.ok || !data) {
+                if (container.spinner) container.spinner.style.display = "none";
+                container.answerBody.innerHTML = `<span style="color: var(--danger)">${escapeHtml(
+                    extractErrorMessage(data, `Request failed (HTTP ${fallbackRes.status}).`)
+                )}</span>`;
+                return;
+            }
             renderFinalAnswer(data, container);
             return;
         }
@@ -504,26 +629,68 @@ document.addEventListener("DOMContentLoaded", () => {
     function renderFinalAnswer(data, container) {
         if (container.spinner) container.spinner.style.display = "none";
 
-        let rawAnswer = data.answer || "No response produced.";
+        const rawAnswer = data.answer || "No response produced.";
 
         // Highlight bracket citations [doc#chunk] as interactive chips
-        const formattedAnswer = formatMarkdownWithCitations(rawAnswer);
-        container.answerBody.innerHTML = formattedAnswer;
+        container.answerBody.innerHTML = formatMarkdownWithCitations(rawAnswer);
 
         container.answerFooter.style.display = "flex";
-        const faith = typeof data.faithfulness === "number" ? data.faithfulness : (data.faithfulness_score || 1.0);
-        const latency = data.latency_ms ? `${data.latency_ms}ms` : "Fast";
+        const faith = typeof data.faithfulness === "number"
+            ? data.faithfulness
+            : (typeof data.faithfulness_score === "number" ? data.faithfulness_score : 0);
+        const latency = typeof data.latency_ms === "number" ? `${Math.round(data.latency_ms)}ms` : "n/a";
 
-        container.metricFaithfulness.textContent = `Faithfulness: ${faith.toFixed(2)}`;
+        container.metricFaithfulness.textContent = `Faithfulness: ${Number(faith).toFixed(2)}`;
         container.metricLatency.textContent = latency;
 
-        if (rawAnswer.toLowerCase().includes("cannot confirm")) {
-            container.verifStatus.textContent = "FALLBACK / ABSTAINED";
-            container.verifStatus.parentElement.className = "verification-tag abstained";
-        } else {
-            container.verifStatus.textContent = "VERIFIED GROUNDED";
-            container.verifStatus.parentElement.className = "verification-tag verified";
+        // Trust the server's verdict, not a phrase match on the answer text.
+        const verified = data.verification_passed === true;
+        const abstained = data.abstained === true;
+        const tag = container.verifStatus.parentElement;
+
+        if (abstained) {
+            // The system declined to answer, so there are no claims to grade.
+            // Rendering a faithfulness score and a claim list here read as "the
+            // answer scored badly", when in fact no answer was produced.
+            container.metricFaithfulness.textContent = "Faithfulness: n/a";
+            container.verifStatus.textContent = "ABSTAINED — NO SUPPORTING EVIDENCE";
+            tag.className = "verification-tag abstained";
+            renderUnsupportedClaims(container, []);
+            return;
         }
+
+        container.verifStatus.textContent = verified ? "VERIFIED GROUNDED" : "UNVERIFIED";
+        tag.className = verified ? "verification-tag verified" : "verification-tag abstained";
+
+        renderUnsupportedClaims(container, data.unsupported_claims);
+    }
+
+    // Claim-level evidence: show exactly which sentences the critic could not
+    // tie to a retrieved passage, instead of a single opaque badge.
+    function renderUnsupportedClaims(container, claims) {
+        const box = container.claimsBox;
+        if (!box) return;
+
+        const items = Array.isArray(claims) ? claims.filter(Boolean) : [];
+        if (items.length === 0) {
+            box.style.display = "none";
+            box.innerHTML = "";
+            return;
+        }
+
+        box.style.display = "block";
+        box.innerHTML = `
+            <div class="claims-header">
+                <strong>${items.length} claim${items.length > 1 ? "s" : ""} not backed by a retrieved source</strong>
+                <span>Treat these statements as unverified.</span>
+            </div>
+            ${items.map(claim => `
+                <div class="claim-item">
+                    <span class="claim-badge">Unsupported</span>
+                    <p>${escapeHtml(claim)}</p>
+                </div>
+            `).join("")}
+        `;
     }
 
     // ==========================================================================
@@ -533,7 +700,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const modalChunkTitle = document.getElementById("modal-chunk-title");
     const modalCloseBtn = document.getElementById("modal-close-btn");
     const modalCitationTag = document.getElementById("modal-citation-tag");
-    const modalAllowedRoles = document.getElementById("modal-allowed-roles");
     const modalChunkText = document.getElementById("modal-chunk-text");
     const modalParentContainer = document.getElementById("modal-parent-container");
     const modalParentText = document.getElementById("modal-parent-text");
@@ -560,24 +726,24 @@ document.addEventListener("DOMContentLoaded", () => {
         citationModal.style.display = "flex";
         modalChunkTitle.textContent = "Loading source...";
         modalCitationTag.textContent = `[${tag}]`;
-        modalAllowedRoles.textContent = "Checking roles...";
         modalChunkText.textContent = "Fetching verified evidence passage...";
         modalParentContainer.style.display = "none";
 
         try {
-            const res = await fetch(`/api/v1/chunk/${encodeURIComponent(tag)}`);
+            const res = await authFetch(`/api/v1/chunk/${encodeURIComponent(tag)}`);
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 modalChunkTitle.textContent = "Evidence Chunk";
-                modalChunkText.textContent = err.detail || `Unable to load chunk details for [${tag}].`;
-                modalAllowedRoles.textContent = "";
+                modalChunkText.textContent = extractErrorMessage(
+                    err,
+                    `Unable to load chunk details for [${tag}].`
+                );
                 return;
             }
 
             const data = await res.json();
             modalChunkTitle.textContent = data.title || "Indexed Document";
             modalCitationTag.textContent = data.citation_tag || `[${tag}]`;
-            modalAllowedRoles.textContent = `Allowed Roles: ${(data.allowed_roles || []).join(", ") || "public"}`;
             modalChunkText.textContent = data.text || "No content found in chunk.";
 
             if (data.parent_text && data.parent_text.trim() !== data.text.trim()) {

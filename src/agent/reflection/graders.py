@@ -2,11 +2,48 @@ import re
 from typing import List, Dict, Any, Tuple
 from src.agent.core.scratchpad import AgentScratchpad
 
+_TOKEN_RE = re.compile(r"[a-z0-9]+(?:[\-\.][a-z0-9]+)*")
+
+# Function words carry no topical signal; keeping them let unrelated passages
+# score as relevant purely because a question mark and a "the" overlapped.
+_STOP_WORDS = {
+    "the", "and", "for", "with", "this", "that", "from", "are", "was", "were",
+    "have", "has", "not", "but", "you", "your", "can", "could", "would",
+    "should", "what", "when", "where", "which", "who", "whom", "how", "does",
+    "did", "explain", "describe", "tell", "please", "any", "all", "about",
+    "into", "its", "their", "there", "here", "then", "than", "them", "these",
+    "those", "been", "being", "will", "also", "more", "most", "some", "such",
+    "only", "other", "over", "very", "just", "because", "while", "after",
+    "before", "between", "use", "using", "work", "works", "working",
+}
+
+
+def query_terms(text: str) -> set:
+    """Significant terms of a query or passage, truncated to a 4-character stem.
+
+    Truncation keeps inflectional variants together ("backups" / "backup",
+    "scheduled" / "schedule") without pulling in a stemmer dependency.
+    """
+    return {
+        tok[:4]
+        for tok in _TOKEN_RE.findall((text or "").lower())
+        if len(tok) >= 3 and tok not in _STOP_WORDS
+    }
+
+
 class RetrievalGrader:
     """
     Corrective RAG (CRAG) Grader:
     Evaluates whether tool observations contain relevant, actionable information.
     """
+
+    @staticmethod
+    def passage_relevance(query: str, passage_text: str) -> float:
+        """Share of the query's significant terms that appear in one passage (0..1)."""
+        q_terms = query_terms(query)
+        if not q_terms:
+            return 0.0
+        return len(q_terms & query_terms(passage_text)) / len(q_terms)
 
     @staticmethod
     def grade_observation(query: str, observation: Any) -> Tuple[bool, float, str]:
@@ -20,16 +57,36 @@ class RetrievalGrader:
         if "error" in obs_str or "not found" in obs_str:
             return False, 0.0, "Tool reported missing entity or search failure."
 
+        # Retrieval tools return a passage list: judge the best passage against the
+        # query. Judging the JSON envelope instead used to mark any large blob as
+        # relevant, so unrelated passages were badged "✓ Relevant".
+        passages = observation.get("passages") if isinstance(observation, dict) else None
+        if isinstance(passages, list) and passages:
+            best = max(
+                (
+                    RetrievalGrader.passage_relevance(query, p.get("text", ""))
+                    for p in passages
+                    if isinstance(p, dict)
+                ),
+                default=0.0,
+            )
+            if best >= 0.34:
+                return True, round(min(1.0, 0.3 + best), 2), "A retrieved passage shares the query's key terms."
+            return (
+                False,
+                round(best, 2),
+                "No retrieved passage shares significant terms with the query.",
+            )
+
         q_tokens = set(re.findall(r'\b[a-zA-Z0-9_\-]{3,}\b', query.lower()))
         obs_tokens = set(re.findall(r'\b[a-zA-Z0-9_\-]{3,}\b', obs_str))
 
         overlap = len(q_tokens.intersection(obs_tokens))
         ratio = overlap / max(1, len(q_tokens))
 
-        if ratio >= 0.35 or len(obs_tokens) > 40:
+        if ratio >= 0.35:
             return True, min(1.0, ratio + 0.3), "Observation contains relevant evidence."
-        else:
-            return False, ratio, "Observation exhibits low semantic relevance to the query."
+        return False, ratio, "Observation exhibits low semantic relevance to the query."
 
 class HallucinationGrader:
     """

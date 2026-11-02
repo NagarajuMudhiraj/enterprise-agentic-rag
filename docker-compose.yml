@@ -1,51 +1,29 @@
-version: '3.8'
+# Local stack: the API only.
+#
+# The service keeps its vector, BM25 and graph indexes in-process, so no
+# external datastore is needed (the previous qdrant/neo4j/opensearch/redis
+# services were never contacted by the code). VECTOR_STORE_URI, GRAPH_STORE_URI,
+# OPENSEARCH_URI and REDIS_URI in .env exist for the adapters that will use
+# them; add those services here once they are wired up.
 
 services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: rag_qdrant
+  api:
+    build: .
+    image: enterprise-rag:local
     ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_storage:/qdrant/storage
+      - "8000:8000"
+    env_file:
+      - .env
     environment:
-      - QDRANT__SERVICE__GRPC_PORT=6334
-
-  neo4j:
-    image: neo4j:5-community
-    container_name: rag_neo4j
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    environment:
-      - NEO4J_AUTH=neo4j/password123
-      - NEO4J_PLUGINS=["apoc"]
+      # Development keeps anonymous access for local evaluation.
+      # For production set APP_ENV=production and provide API_KEYS, e.g.
+      #   API_KEYS="live-key-1:admin,engineer|live-key-2:public" docker compose up
+      APP_ENV: ${APP_ENV:-development}
+      API_KEYS: ${API_KEYS:-}
+      STORAGE_DIR: /data
     volumes:
-      - neo4j_data:/data
-
-  opensearch:
-    image: opensearchproject/opensearch:2.13.0
-    container_name: rag_opensearch
-    environment:
-      - discovery.type=single-node
-      - DISABLE_SECURITY_PLUGIN=true
-      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
-    ports:
-      - "9200:9200"
-    volumes:
-      - opensearch_data:/usr/share/opensearch/data
-
-  redis:
-    image: redis:7-alpine
-    container_name: rag_redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+      - rag_data:/data
+    restart: unless-stopped
 
 volumes:
-  qdrant_storage:
-  neo4j_data:
-  opensearch_data:
-  redis_data:
+  rag_data:

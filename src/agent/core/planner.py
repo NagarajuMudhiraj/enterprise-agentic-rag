@@ -1,12 +1,16 @@
 import re
 from typing import List, Dict, Any
 from src.agent.llm.provider import LLMProvider
+from src.common.config import settings
+from src.prompts import load_prompt
 
 class AgentPlanner:
     """
     Analyzes complex user questions and formulates a step-by-step goal plan.
     Identifies multi-hop dependencies, entities, and comparison dimensions.
     """
+
+    SYSTEM_PROMPT = load_prompt("system_planner")
 
     def __init__(self, llm_provider: LLMProvider):
         self.llm = llm_provider
@@ -15,17 +19,12 @@ class AgentPlanner:
         # If running with Groq or OpenAI, prompt the LLM for a structured plan
         if self.llm.provider_type in ["groq", "openai"]:
             messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an AI reasoning planner. Given a user query, break it down into "
-                        "1 to 3 ordered, actionable retrieval sub-goals. "
-                        "Return ONLY a numbered list of goals, one per line."
-                    )
-                },
+                {"role": "system", "content": self.SYSTEM_PROMPT},
                 {"role": "user", "content": f"Query: {query}"}
             ]
-            resp = await self.llm.chat_completion(messages, temperature=0.0, max_tokens=256)
+            # Planning is lightweight: use the fast model on Groq so the main model's token budget is kept for answering
+            plan_model = settings.GROQ_FAST_MODEL if self.llm.provider_type == "groq" else None
+            resp = await self.llm.chat_completion(messages, temperature=0.0, max_tokens=512, model=plan_model)
             if resp.get("status") == "success" and resp.get("content"):
                 lines = [
                     re.sub(r'^\d+[\.\)]\s*', '', l.strip()) 

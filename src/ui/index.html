@@ -6,8 +6,8 @@
     <title>Enterprise Agentic RAG | Intelligent Document & Knowledge Intelligence</title>
     <meta name="description" content="Production Enterprise Agentic RAG System powered by Groq and ReAct reasoning with real-time PDF, DOCX, and Markdown document intelligence.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f43f5e' stroke-width='2.2'><polygon points='12 2 2 7 12 12 22 7 12 2'/><polyline points='2 17 12 22 22 17'/><polyline points='2 12 12 17 22 12'/></svg>">
     <link rel="stylesheet" href="/static/index.css">
 </head>
 <body>
@@ -61,18 +61,12 @@
 
             <!-- Header Controls & Theme Switcher -->
             <div class="header-actions">
-                <div class="header-role-container">
-                    <label for="role-select" class="role-label">Active Role:</label>
-                    <div class="select-wrapper">
-                        <select id="role-select">
-                            <option value="public" selected>Public</option>
-                            <option value="employee">Employee</option>
-                            <option value="engineer">Engineer</option>
-                            <option value="admin">Administrator</option>
-                        </select>
-                    </div>
-                </div>
-
+                <button type="button" id="auth-key-btn" class="theme-toggle-btn" title="Set or replace the API key for this browser" aria-label="Set API key">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+                    </svg>
+                    <span id="auth-key-label">API Key</span>
+                </button>
                 <button type="button" id="theme-toggle-btn" class="theme-toggle-btn" title="Toggle Clean White / Dark Velvet Pink mode" aria-label="Toggle theme">
                     <svg class="theme-icon-dark" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="5"></circle>
@@ -133,27 +127,6 @@
                                 <span class="format-tag">.DOCX</span>
                                 <span class="format-tag">.MD</span>
                                 <span class="format-tag">.TXT</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Ingestion Role Specification -->
-                    <div class="ingest-options">
-                        <div class="option-row">
-                            <span class="option-label">Assign Access Roles:</span>
-                            <div class="role-checkbox-group">
-                                <label class="checkbox-pill">
-                                    <input type="checkbox" id="role-cb-public" value="public" checked>
-                                    <span>public</span>
-                                </label>
-                                <label class="checkbox-pill">
-                                    <input type="checkbox" id="role-cb-employee" value="employee" checked>
-                                    <span>employee</span>
-                                </label>
-                                <label class="checkbox-pill">
-                                    <input type="checkbox" id="role-cb-admin" value="admin">
-                                    <span>admin</span>
-                                </label>
                             </div>
                         </div>
                     </div>
@@ -312,7 +285,6 @@
             <div class="modal-body">
                 <div class="modal-tag-row">
                     <span class="modal-tag" id="modal-citation-tag">[doc#chunk]</span>
-                    <span class="modal-roles" id="modal-allowed-roles">Roles: public</span>
                 </div>
                 <div class="modal-section-label">Retrieved Evidence Passage</div>
                 <div class="modal-content-box" id="modal-chunk-text">Loading evidence content...</div>
@@ -322,6 +294,28 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- API Key Gate -->
+    <div class="auth-gate" id="auth-gate" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+        <form class="auth-card" id="auth-form">
+            <h3 id="auth-title">Connect to the API</h3>
+            <p class="auth-hint">Paste the API key issued by your administrator. It is kept in this tab's session storage and never leaves this browser.</p>
+            <input
+                type="password"
+                id="auth-key-input"
+                class="auth-input"
+                placeholder="X-API-Key"
+                autocomplete="off"
+                spellcheck="false"
+                required
+            >
+            <p class="auth-error" id="auth-error" style="display: none;"></p>
+            <div class="auth-actions">
+                <button type="button" class="auth-cancel" id="auth-cancel">Cancel</button>
+                <button type="submit" class="auth-submit">Connect</button>
+            </div>
+        </form>
     </div>
 
     <!-- Notification Toast Container -->

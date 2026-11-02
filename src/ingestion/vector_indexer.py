@@ -1,3 +1,5 @@
+import re
+import zlib
 import numpy as np
 from typing import List, Dict, Optional, Tuple
 from src.common.models import Chunk
@@ -9,7 +11,7 @@ class VectorIndexer:
     Supports in-memory cosine search and pluggable external vector engines (Qdrant).
     """
 
-    def __init__(self, dim: int = 128):
+    def __init__(self, dim: int = 512):
         self.dim = dim
         self.chunks: Dict[str, Chunk] = {}
         self.vectors: Dict[str, np.ndarray] = {}
@@ -20,15 +22,16 @@ class VectorIndexer:
         Used as default when external LLM API keys are not supplied.
         """
         vec = np.zeros(self.dim, dtype=np.float32)
-        words = text.lower().split()
+        words = re.findall(r'[a-z0-9]+(?:[\-\.][a-z0-9]+)*', text.lower())
         if not words:
             return vec
 
         for word in words:
-            # Hash tokens deterministically to dimension buckets
-            h = hash(word)
-            idx = abs(h) % self.dim
-            val = 1.0 if (h > 0) else -1.0
+            # Stable hash (Python's built-in hash() is randomized per process,
+            # which made persisted vectors incomparable with query vectors)
+            h = zlib.crc32(word.encode("utf-8"))
+            idx = h % self.dim
+            val = 1.0 if (h >> 31) & 1 else -1.0
             vec[idx] += val
 
         norm = np.linalg.norm(vec)
@@ -41,14 +44,17 @@ class VectorIndexer:
         Embeds and stores chunks in the vector index.
         """
         for chunk in chunks:
-            if chunk.embedding is None:
-                vec = self._embed_text_fallback(chunk.text)
-                chunk.embedding = vec.tolist()
-            else:
-                vec = np.array(chunk.embedding, dtype=np.float32)
-            
+            # Always re-embed: fallback vectors are cheap and stored ones may be stale
+            vec = self._embed_text_fallback(chunk.text)
+            chunk.embedding = None
+
             self.chunks[chunk.chunk_id] = chunk
             self.vectors[chunk.chunk_id] = vec
+
+    def remove_chunks(self, chunk_ids: List[str]):
+        for cid in chunk_ids:
+            self.chunks.pop(cid, None)
+            self.vectors.pop(cid, None)
 
     def search(self, query: str, top_k: int = 10, role_filter: Optional[List[str]] = None) -> List[Tuple[Chunk, float]]:
         """

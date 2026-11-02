@@ -12,6 +12,8 @@ if sys.platform == "win32":
 
 from src.pipeline import EnterpriseRAGPipeline
 from src.common.config import settings
+from src.common.logging_config import configure_logging
+
 
 def print_header():
     print("=" * 65)
@@ -76,11 +78,23 @@ async def cmd_query(args, pipeline: EnterpriseRAGPipeline):
     setup_agent_event_logger(pipeline, verbose=True)
     response = await pipeline.query(query_str, user_roles=roles)
 
-    status_badge = "✅ VERIFIED" if response.verification_passed else ("⚠️ FALLBACK / ABSTAINED" if response.fallback_used else "❌ REJECTED")
+    if response.verification_passed:
+        status_badge = "✅ VERIFIED"
+    elif response.abstained:
+        status_badge = "⚠️ ABSTAINED (no supporting evidence)"
+    else:
+        status_badge = "❌ UNVERIFIED"
+
+    # An abstention asserts nothing, so a faithfulness score would be meaningless.
+    faithfulness = "n/a" if response.abstained else f"{response.faithfulness_score:.2f}"
     print(f"\n   Status: {status_badge}")
-    print(f"   Faithfulness: {response.faithfulness_score:.2f} | Latency: {response.latency_ms:.1f}ms | Retries: {response.retries_used}")
+    print(f"   Faithfulness: {faithfulness} | Latency: {response.latency_ms:.1f}ms | Retries: {response.retries_used}")
     if response.citations:
         print(f"   Citations: {', '.join(response.citations)}")
+    if response.unsupported_claims:
+        print("   Unsupported claims:")
+        for claim in response.unsupported_claims:
+            print(f"     • {claim}")
     
     clean_ans = response.answer.replace('\r', '')
     print(f"\n💬 Answer:\n{clean_ans}\n")
@@ -107,13 +121,23 @@ async def cmd_chat(args, pipeline: EnterpriseRAGPipeline):
                 break
 
             response = await pipeline.query(user_input, user_roles=roles)
-            status_badge = "✅ VERIFIED" if response.verification_passed else ("⚠️ ABSTAINED" if response.fallback_used else "❌ REJECTED")
-            
+            if response.verification_passed:
+                status_badge = "✅ VERIFIED"
+            elif response.abstained:
+                status_badge = "⚠️ ABSTAINED"
+            else:
+                status_badge = "❌ UNVERIFIED"
+            faithfulness = "n/a" if response.abstained else f"{response.faithfulness_score:.2f}"
+
             clean_ans = response.answer.replace('\r', '')
-            print(f"\nAgent [{status_badge} | {response.latency_ms:.1f}ms | Faithfulness: {response.faithfulness_score:.2f}]:")
+            print(f"\nAgent [{status_badge} | {response.latency_ms:.1f}ms | Faithfulness: {faithfulness}]:")
             print(f"{clean_ans}")
             if response.citations:
                 print(f"Citations: {', '.join(response.citations)}")
+            if response.unsupported_claims:
+                print("Unsupported claims:")
+                for claim in response.unsupported_claims:
+                    print(f"  • {claim}")
         except (KeyboardInterrupt, EOFError):
             print("\nExiting chat.")
             break
@@ -130,10 +154,13 @@ def cmd_status(args, pipeline: EnterpriseRAGPipeline):
 def cmd_serve(args):
     import uvicorn
     print_header()
-    print(f"Starting Production FastAPI Server on port {args.port}...")
+    print(f"Starting FastAPI server on http://{args.host}:{args.port}")
+    print(f"API keys configured: {len(settings.api_key_roles())} | env: {settings.APP_ENV}")
+    # One worker only: the index, its lock and the rate limiter are per-process.
     uvicorn.run("src.api.server:app", host=args.host, port=args.port, reload=args.reload)
 
 def main():
+    configure_logging()
     parser = argparse.ArgumentParser(description="Enterprise Agentic RAG CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -170,7 +197,7 @@ def main():
         cmd_serve(args)
         return
 
-    pipeline = EnterpriseRAGPipeline(storage_dir="data/storage")
+    pipeline = EnterpriseRAGPipeline(storage_dir=settings.STORAGE_DIR)
 
 
     if args.command == "ingest":

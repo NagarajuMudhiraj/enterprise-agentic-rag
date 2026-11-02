@@ -16,27 +16,35 @@ def build_retrieval_tools(
 
     # Tool 1: Hybrid Search
     async def run_hybrid_search(query: str, top_k: int = 5, role_filter: Optional[List[str]] = None, **kwargs) -> Dict[str, Any]:
-        # Dense + Sparse
-        v_results = vector_indexer.search(query, top_k=top_k, role_filter=role_filter)
-        k_results = keyword_indexer.search(query, top_k=top_k, role_filter=role_filter)
+        # Keep observations small so LLM requests stay within provider token limits
+        try:
+            top_k = max(1, min(int(top_k), 6))
+        except (TypeError, ValueError):
+            top_k = 5
 
-        # Merge unique chunks
-        seen = set()
+        # Dense + Sparse
+        v_results = vector_indexer.search(query, top_k=top_k * 2, role_filter=role_filter)
+        k_results = keyword_indexer.search(query, top_k=top_k * 2, role_filter=role_filter)
+
+        # Reciprocal Rank Fusion (BM25 weighted higher: exact terms matter most for lookups)
+        fused: Dict[str, Dict[str, Any]] = {}
+        for weight, results in ((1.0, v_results), (1.5, k_results)):
+            for rank, (c, _) in enumerate(results):
+                entry = fused.setdefault(c.chunk_id, {"chunk": c, "score": 0.0})
+                entry["score"] += weight / (60 + rank + 1)
+
+        ranked = sorted(fused.values(), key=lambda e: e["score"], reverse=True)[:top_k]
         candidates = []
-        for c, score in v_results + k_results:
-            if c.chunk_id in seen:
-                continue
-            seen.add(c.chunk_id)
-            tag = f"[{c.doc_id}#{c.chunk_id}]"
+        for e in ranked:
+            c = e["chunk"]
             candidates.append({
-                "citation_tag": tag,
+                "citation_tag": f"[{c.doc_id}#{c.chunk_id}]",
                 "doc_id": c.doc_id,
                 "chunk_id": c.chunk_id,
+                "source": c.metadata.get("title", ""),
                 "text": c.text,
-                "score": round(score, 3)
+                "score": round(e["score"] * 100, 3)
             })
-            if len(candidates) >= top_k:
-                break
 
         return {
             "query": query,
@@ -58,7 +66,7 @@ def build_retrieval_tools(
                 "top_k": {
                     "type": "integer",
                     "default": 5,
-                    "description": "Maximum number of relevant evidence passages to return."
+                    "description": "Maximum number of relevant evidence passages to return (max 6)."
                 }
             },
             "required": ["query"]

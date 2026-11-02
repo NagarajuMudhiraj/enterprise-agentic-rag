@@ -1,0 +1,28 @@
+# Build context hygiene: never ship local state, secrets or tooling.
+.git
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+
+# Local state and secrets
+data
+.env
+.env.*
+
+# Tests and docs are not part of the runtime image.
+# NOTE: only root-level markdown is excluded — src/prompts/*.md is a runtime asset.
+tests
+scripts
+.agent
+.agents
+.gsd
+adapters
+/*.md
+
+Dockerfile
+docker-compose.yml
+.dockerignore

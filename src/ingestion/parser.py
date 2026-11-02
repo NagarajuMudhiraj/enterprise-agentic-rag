@@ -64,27 +64,84 @@ class DocumentParser:
     def parse_docx(file_path: str, title: Optional[str] = None, allowed_roles: Optional[List[str]] = None) -> Document:
         """
         Parses DOCX documents by extracting XML paragraphs directly from the zip container.
+        Word headings become Markdown headings (so the chunker can split by section) and
+        tables are flattened into pipe-delimited rows.
         """
         import zipfile
         import xml.etree.ElementTree as ET
 
+        W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
         filename = os.path.basename(file_path)
         doc_title = title or os.path.splitext(filename)[0]
 
-        paragraphs = []
+        def paragraph_text(p) -> str:
+            parts = []
+            for node in p.iter():
+                if node.tag == W + "t" and node.text:
+                    parts.append(node.text)
+                elif node.tag == W + "tab":
+                    parts.append("\t")
+                elif node.tag in (W + "br", W + "cr"):
+                    parts.append("\n")
+            return "".join(parts).strip()
+
+        def heading_level(p) -> int:
+            ppr = p.find(W + "pPr")
+            if ppr is None:
+                return 0
+            style = ppr.find(W + "pStyle")
+            if style is not None:
+                val = (style.get(W + "val") or "").lower()
+                if val == "title":
+                    return 1
+                m = re.match(r'^heading\s*(\d)$', val)
+                if m:
+                    return int(m.group(1))
+            outline = ppr.find(W + "outlineLvl")
+            if outline is not None:
+                try:
+                    return int(outline.get(W + "val", "9")) + 1
+                except ValueError:
+                    pass
+            return 0
+
+        def walk(container, out: List[str]):
+            for child in container:
+                if child.tag == W + "p":
+                    text = paragraph_text(child)
+                    if not text:
+                        continue
+                    level = heading_level(child)
+                    if 1 <= level <= 6:
+                        out.append(f"{'#' * level} {' '.join(text.split())}")
+                    else:
+                        out.append(text)
+                elif child.tag == W + "tbl":
+                    rows = []
+                    for tr in child.iter(W + "tr"):
+                        cells = []
+                        for tc in tr.findall(W + "tc"):
+                            cell = " ".join(paragraph_text(p) for p in tc.iter(W + "p")).strip()
+                            cells.append(" ".join(cell.split()))
+                        if any(cells):
+                            rows.append("| " + " | ".join(cells) + " |")
+                    if rows:
+                        out.append("\n".join(rows))
+                elif child.tag in (W + "sdt", W + "sdtContent", W + "body"):
+                    walk(child, out)
+
+        paragraphs: List[str] = []
         try:
             with zipfile.ZipFile(file_path) as z:
                 xml_content = z.read("word/document.xml")
             tree = ET.fromstring(xml_content)
-            for p in tree.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
-                texts = [
-                    node.text for node in p.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
-                    if node.text
-                ]
-                if texts:
-                    paragraphs.append("".join(texts))
+            body = tree.find(W + "body")
+            walk(body if body is not None else tree, paragraphs)
         except Exception as e:
-            paragraphs.append(f"Error parsing DOCX file: {e}")
+            raise ValueError(f"Could not read DOCX file '{filename}': {e}") from e
+
+        if not paragraphs:
+            raise ValueError(f"No readable text found in DOCX file '{filename}'.")
 
         full_text = "\n\n".join(paragraphs)
         return DocumentParser.parse_markdown(
@@ -104,6 +161,8 @@ class DocumentParser:
             return cls.parse_pdf(file_path, title=doc_title, allowed_roles=allowed_roles)
         elif ext == ".docx":
             return cls.parse_docx(file_path, title=doc_title, allowed_roles=allowed_roles)
+        elif ext == ".doc":
+            raise ValueError("Legacy .doc files are not supported. Save the file as .docx in Word and upload again.")
 
         # Markdown / Plain text / Code files
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:

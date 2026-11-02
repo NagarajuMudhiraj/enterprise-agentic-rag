@@ -32,6 +32,16 @@ class KeywordIndexer:
         if self.corpus_tokens:
             self.bm25 = BM25Okapi(self.corpus_tokens)
 
+    def remove_chunks(self, chunk_ids: List[str]):
+        drop = set(chunk_ids)
+        remaining = [c for c in self.chunks if c.chunk_id not in drop]
+        self.chunks = []
+        self.corpus_tokens = []
+        self.bm25 = None
+        self.chunk_id_map = {}
+        if remaining:
+            self.index_chunks(remaining)
+
     def search(self, query: str, top_k: int = 10, role_filter: Optional[List[str]] = None) -> List[Tuple[Chunk, float]]:
         if not self.bm25 or not self.chunks:
             return []

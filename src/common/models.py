@@ -63,7 +63,16 @@ class VerifiedResponse(BaseModel):
     citations: List[str] = Field(default_factory=list)
     faithfulness_score: float
     verification_passed: bool
+    # True when the system declined to answer because no retrieved passage
+    # supported the question. That is a different outcome from "answered, but
+    # ungrounded": an abstention makes no factual claims, so there is nothing
+    # for the critic to grade and a faithfulness number would be misleading.
+    abstained: bool = False
     retries_used: int = 0
     fallback_used: bool = False
     latency_ms: float = 0.0
     trace_events: List[Dict[str, Any]] = Field(default_factory=list)
+    # Claims the critic could not tie to retrieved evidence; surfaced to the UI
+    # so users can see exactly which sentences are unsupported.
+    unsupported_claims: List[str] = Field(default_factory=list)
+    prompt_version: Optional[str] = None
