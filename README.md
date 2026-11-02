@@ -119,14 +119,14 @@ flowchart TD
         OUTPUT(["✅ Verified Answer with Citations"])
         
         VERIFY --> DECISION
-        DECISION -->|Passed (High Faithfulness)| OUTPUT
-        DECISION -->|Missing Evidence / Low Score| RETRY
-        DECISION -->|Exceeded Retry Limit| ABSTAIN
+        DECISION -->|"Passed (High Faithfulness)"| OUTPUT
+        DECISION -->|"Missing Evidence / Low Score"| RETRY
+        DECISION -->|"Exceeded Retry Limit"| ABSTAIN
     end
     class S5 stage5;
 
     GEN --> VERIFY
-    RETRY -.->|Feedback Loop: Reformulated Query| S2
+    RETRY -.->|"Feedback Loop: Reformulated Query"| S2
 
     %% Cross-Cutting Operations
     subgraph CROSS["Cross-Cutting Governance & Observability"]
@@ -364,8 +364,8 @@ flowchart TD
     
     CRITIC --> CHECK{"Faithfulness & Claim Support"}
     
-    CHECK -->|Entailment Score >= 0.85| PASS["Release Answer with Validated Citations"]
-    CHECK -->|Hallucination / Unsupported Claims| EVAL_RETRY{"Retry Count < Max?"}
+    CHECK -->|"Entailment Score ≥ 0.85"| PASS["Release Answer with Validated Citations"]
+    CHECK -->|"Hallucination / Unsupported Claims"| EVAL_RETRY{"Retry Count below Max?"}
     
     EVAL_RETRY -->|Yes| REFORMULATE["Formulate Refined Query & Missing Info"]
     REFORMULATE --> ROUTER["Back to Stage 2: Adaptive Router"]
@@ -420,7 +420,7 @@ sequenceDiagram
     
     par Parallel Retrieval
         Router->>Retrieval: Path A: BM25 + Vector ("SLA data backup EU-Central")
-        Router->>Retrieval: Path B: Graph query ([Region: EU-Central]->[Backup Policy])
+        Router->>Retrieval: Path B: Graph query ([Region: EU-Central] → [Backup Policy])
     end
     
     Retrieval-->>Fusion: Return raw candidate chunks & subgraphs
